@@ -257,6 +257,8 @@ input{font-size:16px}
 .setrow label{flex:1;margin:0;font-size:12.5px}
 .setrow input{width:110px;text-align:center}
 
+.admlock{background:#F7F2E7;border:1.6px dashed #C9962F;border-radius:12px;padding:12px 14px;font-size:12px;color:#8A6414;text-align:center;margin-bottom:14px;line-height:1.7}
+
 .toast{position:fixed;left:16px;right:16px;bottom:20px;max-width:428px;margin:0 auto;background:#26302D;color:#fff;padding:14px 16px;border-radius:14px;font-size:13.5px;font-weight:700;text-align:center;z-index:300;opacity:0;transform:translateY(90px);transition:.32s cubic-bezier(.2,1,.3,1);pointer-events:none}
 .toast.on{opacity:1;transform:none}
 .toast.ok{background:#2F7A58}
@@ -416,9 +418,11 @@ input{font-size:16px}
 <label>الآيبان</label><input id="st-iban" placeholder="SA00 0000 0000 0000 0000 0000">
 <div style="height:12px"></div>
 <label>رقم STC Pay</label><input id="st-stc" type="tel" inputmode="numeric" placeholder="05XXXXXXXX">
+<div style="height:12px"></div>
 <div style="height:16px"></div>
 <button class="btn green" onclick="saveSettings()">حفظ الإعدادات</button>
-<button class="btn line" onclick="setRole('s')">رجوع</button>
+<button class="btn line" onclick="startChangeAdminPin()">🔑 تغيير الرمز الإداري</button>
+<button class="btn line" onclick="closeSettings()">رجوع</button>
 </div>
 </div>
 
@@ -429,7 +433,7 @@ input{font-size:16px}
       <div class="lockbar">
         <button onclick="lockStaff()">🔒 قفل اللوحة</button>
         <button onclick="startChangePin()">🔑 الرمز</button>
-<button onclick="openSettings()">⚙️ التسعير</button>
+<button onclick="openSettings()">🛡️ الإدارة</button>
       </div>
       <div class="stats">
         <div class="st"><b id="s-act">0</b><span>سيارات لديك</span></div>
@@ -467,11 +471,11 @@ var CH = null;
 function safeLoad(){
   try{
     var raw = localStorage.getItem(KEY);
-    if(raw){ var d = JSON.parse(raw); if(d && d.t){ TICKETS = d.t; MYID = d.m || null; if(d.p) PIN = d.p; if(d.n) NOTES = d.n; if(d.b) BOOKINGS = d.b; if(d.c) CFG = d.c; } }
+    if(raw){ var d = JSON.parse(raw); if(d && d.t){ TICKETS = d.t; MYID = d.m || null; if(d.p) PIN = d.p; if(d.ap) ADMINPIN = d.ap; if(d.n) NOTES = d.n; if(d.b) BOOKINGS = d.b; if(d.c) CFG = d.c; } }
   }catch(e){}
 }
 function safeSave(){
-  try{ localStorage.setItem(KEY, JSON.stringify({t:TICKETS, m:MYID, p:PIN, n:NOTES, b:BOOKINGS, c:CFG})); }
+  try{ localStorage.setItem(KEY, JSON.stringify({t:TICKETS, m:MYID, p:PIN, ap:ADMINPIN, n:NOTES, b:BOOKINGS, c:CFG})); }
   catch(e){
     try{
       var lite=[];
@@ -479,7 +483,7 @@ function safeSave(){
         var c={}; for(var k in TICKETS[i]) if(k!=='photo') c[k]=TICKETS[i][k];
         lite.push(c);
       }
-      localStorage.setItem(KEY, JSON.stringify({t:lite, m:MYID, p:PIN, n:NOTES, b:BOOKINGS, c:CFG}));
+      localStorage.setItem(KEY, JSON.stringify({t:lite, m:MYID, p:PIN, ap:ADMINPIN, n:NOTES, b:BOOKINGS, c:CFG}));
     }catch(e2){}
   }
   try{ if(CH) CH.postMessage({t:TICKETS, n:NOTES, b:BOOKINGS, c:CFG}); }catch(e){}
@@ -617,30 +621,51 @@ function closeLb(){ document.getElementById('lb').classList.remove('on'); }
 
 /* ===== رمز دخول الموظف ===== */
 var PIN = '1234';
+var ADMINPIN = '112233';
 var UNLOCKED = false;
+var ADMINUNLOCKED = false;
 var BUF = '';
+var PINLEN = 4;
 var TRIES = 0;
 var LOCKED_UNTIL = 0;
 var MODE = 'login';   /* login | new | confirm */
 var TMP = '';
 var LOCKTIMER = null;
 
-function pinReset(){ BUF=''; MODE='login'; TMP=''; drawPin(); }
+function pinReset(){ BUF=''; MODE='login'; TMP=''; PINLEN=4; drawPin(); }
+function pinLenFor(mode){ return (mode==='adminlogin'||mode==='adminnew'||mode==='adminconfirm') ? 6 : 4; }
+
 
 function pinScreen(){
-  document.getElementById('heroT').textContent = MODE==='login' ? 'دخول الموظف' : 'تغيير رمز الدخول';
-  document.getElementById('heroS').textContent = MODE==='login' ? 'منطقة مخصصة لموظفي الخدمة' : 'اختر رمزاً جديداً من 4 أرقام';
+  var titles = {
+    login:['دخول الموظف','منطقة مخصصة لموظفي الخدمة'],
+    adminlogin:['رمز الإدارة','هذه الخانة خاصة بمسؤول التطبيق فقط'],
+    adminnew:['رمز إداري جديد','اختر رمزاً جديداً من 6 أرقام'],
+    adminconfirm:['تأكيد الرمز الإداري','أعد إدخال نفس الرمز'],
+    'new':['رمز دخول جديد','اختر رمزاً جديداً من 4 أرقام'],
+    confirm:['تأكيد رمز الدخول','أعد إدخال نفس الرمز']
+  };
+  var t = titles[MODE] || titles.login;
+  PINLEN = pinLenFor(MODE);
+  if(BUF.length > PINLEN) BUF = '';
+  document.getElementById('heroT').textContent = t[0];
+  document.getElementById('heroS').textContent = t[1];
+  document.getElementById('pin-t').textContent = t[0];
   show('v-pin');
   drawPin();
 }
 
 function drawPin(){
-  var d = document.getElementById('pin-dots').children;
-  for(var i=0;i<4;i++){ d[i].className = i < BUF.length ? 'f' : ''; }
+  var dEl = document.getElementById('pin-dots');
+  var html = '';
+  for(var i=0;i<PINLEN;i++){ html += '<i'+(i<BUF.length?' class="f"':'')+'></i>'; }
+  dEl.innerHTML = html;
+  dEl.style.gap = PINLEN>4 ? '10px' : '13px';
   var t={login:'رمز دخول الموظف',neu:'الرمز الجديد',confirm:'تأكيد الرمز'};
-  document.getElementById('pin-ic').textContent = MODE==='login' ? '🔒' : '🔑';
-  document.getElementById('pin-t').textContent = MODE==='login' ? 'رمز دخول الموظف' : (MODE==='new' ? 'اختر رمزاً جديداً' : 'أعد إدخال الرمز الجديد');
-  document.getElementById('pin-s').textContent = MODE==='login' ? 'أدخل الرمز المكوّن من 4 أرقام' : (MODE==='new' ? 'من 4 أرقام' : 'للتأكيد');
+  var icons = { login:'🔒', adminlogin:'🛡️', 'new':'🔑', confirm:'🔑', adminnew:'🛡️', adminconfirm:'🛡️' };
+  var subs  = { login:'أدخل الرمز المكوّن من 4 أرقام', adminlogin:'أدخل الرمز الإداري من 6 أرقام', 'new':'من 4 أرقام', confirm:'للتأكيد', adminnew:'من 6 أرقام', adminconfirm:'للتأكيد' };
+  document.getElementById('pin-ic').textContent = icons[MODE] || '🔒';
+  document.getElementById('pin-s').textContent = subs[MODE] || 'أدخل الرمز المكوّن من 4 أرقام';
   var wait = Math.ceil((LOCKED_UNTIL - Date.now())/1000);
   var pad = document.getElementById('pin-pad').querySelectorAll('button');
   for(var k=0;k<pad.length;k++){ pad[k].disabled = wait>0; }
@@ -654,18 +679,58 @@ function pinMsg(m, bad){
 
 function pinKey(n){
   if(Date.now() < LOCKED_UNTIL) return;
-  if(BUF.length>=4) return;
+  if(BUF.length>=PINLEN) return;
   BUF += n; drawPin();
   document.getElementById('pin-msg').textContent='';
-  if(BUF.length===4) setTimeout(pinSubmit,170);
+  if(BUF.length===PINLEN) setTimeout(pinSubmit,170);
 }
 function pinDel(){ if(Date.now()<LOCKED_UNTIL) return; BUF=BUF.slice(0,-1); drawPin(); }
 function pinCancel(){
   if(MODE==='login'){ BUF=''; setRole('g'); }
+  else if(MODE==='adminlogin' || MODE==='adminnew' || MODE==='adminconfirm'){
+    MODE='login'; BUF=''; TMP=''; paint();
+  }
   else { MODE='login'; BUF=''; TMP=''; UNLOCKED=true; paint(); }
 }
 
 function pinSubmit(){
+  if(MODE==='adminlogin'){
+    if(BUF===ADMINPIN){
+      ADMINUNLOCKED=true; TRIES=0; BUF=''; pinMsg('');
+      toast('تم فتح إعدادات الإدارة','ok');
+      if(PENDING_ADMIN_CHANGE){ PENDING_ADMIN_CHANGE=false; MODE='adminnew'; BUF=''; pinScreen(); }
+      else { MODE='login'; openSettings(); }
+    }else{
+      TRIES++; BUF='';
+      pinMsg('الرمز الإداري غير صحيح — بقي لك '+(5-TRIES)+' محاولات', true);
+      beep('bad');
+      if(TRIES>=5){
+        LOCKED_UNTIL = Date.now()+30000; TRIES=0; drawPin();
+        pinMsg('محاولات كثيرة — انتظر 30 ثانية', true);
+        clearInterval(LOCKTIMER);
+        LOCKTIMER = setInterval(function(){
+          var w = Math.ceil((LOCKED_UNTIL-Date.now())/1000);
+          if(w<=0){ clearInterval(LOCKTIMER); pinMsg(''); drawPin(); }
+          else document.getElementById('pin-msg').textContent='محاولات كثيرة — انتظر '+w+' ثانية';
+        },1000);
+      }
+    }
+    return;
+  }
+  if(MODE==='adminnew'){ TMP=BUF; BUF=''; MODE='adminconfirm'; pinMsg(''); pinScreen(); return; }
+  if(MODE==='adminconfirm'){
+    if(BUF===TMP){
+      ADMINPIN=TMP; TMP=''; BUF=''; MODE='login';
+      safeSave();
+      toast('تم تغيير الرمز الإداري بنجاح','ok');
+      paint();
+    }else{
+      BUF=''; MODE='adminnew';
+      pinMsg('الرمزان غير متطابقين — أعد المحاولة', true);
+      beep('bad');
+    }
+    return;
+  }
   if(MODE==='login'){
     if(BUF===PIN){
       UNLOCKED=true; TRIES=0; BUF=''; pinMsg('');
@@ -691,7 +756,7 @@ function pinSubmit(){
       }
     }
   }else if(MODE==='new'){
-    TMP=BUF; BUF=''; MODE='confirm'; pinMsg(''); drawPin();
+    TMP=BUF; BUF=''; MODE='confirm'; pinMsg(''); pinScreen();
   }else{
     if(BUF===TMP){
       PIN=TMP; TMP=''; BUF=''; MODE='login'; UNLOCKED=true;
@@ -706,8 +771,13 @@ function pinSubmit(){
   }
 }
 
-function lockStaff(){ UNLOCKED=false; BUF=''; MODE='login'; TRIES=0; toast('تم قفل لوحة الموظف'); paint(); }
+function lockStaff(){ UNLOCKED=false; ADMINUNLOCKED=false; SETTINGS_OPEN=false; BUF=''; MODE='login'; TRIES=0; toast('تم قفل لوحة الموظف'); paint(); }
 function startChangePin(){ MODE='new'; BUF=''; TMP=''; pinMsg(''); pinScreen(); }
+function startChangeAdminPin(){
+  if(!ADMINUNLOCKED){ MODE='adminlogin'; BUF=''; pinScreen(); PENDING_ADMIN_CHANGE=true; return; }
+  MODE='adminnew'; BUF=''; TMP=''; pinMsg(''); pinScreen();
+}
+var PENDING_ADMIN_CHANGE = false;
 
 /* ================= نظام التنبيهات ================= */
 var NOTES = [];      /* {id,to,ic,tx,t,read} */
@@ -944,7 +1014,7 @@ function doInstall(){
 
 /* ================= الحجز والتسعير ================= */
 var BOOKINGS = [];
-var CFG = { per:25, rate:60, min:3, owner:'', iban:'', stc:'' };
+var CFG = { per:25, rate:60, min:3, owner:'', iban:'', stc:'', wa:'' };
 var BK = { guests:100, hours:4, lat:null, lng:null, acc:null, receipt:null };
 
 function money(n){ return Number(n).toLocaleString('en-US'); }
@@ -1096,6 +1166,7 @@ function paintBook(){
 
 /* ===== الإعدادات ===== */
 function openSettings(){
+  if(!ADMINUNLOCKED){ MODE='adminlogin'; BUF=''; pinScreen(); return; }
   document.getElementById('st-per').value = CFG.per;
   document.getElementById('st-rate').value = CFG.rate;
   document.getElementById('st-min').value = CFG.min;
@@ -1108,6 +1179,7 @@ function openSettings(){
   show('v-settings');
 }
 var SETTINGS_OPEN = false;
+function closeSettings(){ SETTINGS_OPEN = false; paint(); }
 function saveSettings(){
   var per = parseInt(document.getElementById('st-per').value,10);
   var rate = parseInt(document.getElementById('st-rate').value,10);
@@ -1158,7 +1230,8 @@ function drawBooks(){
       '👥 '+b.guests+' ضيف · ⏱️ '+b.hours+' ساعات · 👷 '+b.staff+' موظف<br>'+
       '💰 <b style="color:#2A5F55">'+money(b.total)+' ريال</b><br>'+ loc +
       '</div>'+ rc +
-      '<div class="ticket-actions" style="display:flex;gap:8px;margin-top:10px">'+btn+'</div></div>';
+      '<div class="ticket-actions" style="display:flex;gap:8px;margin-top:10px">'+btn+
+      '</div></div>';
   }
   el.innerHTML = h;
 }
@@ -1408,7 +1481,7 @@ function paint(){
   drawInbox('g','inbox-g'); drawInbox('g','inbox-r'); drawInbox('s','inbox-s');
   if(ROLE==='g') paintGuest();
   else if(ROLE==='c') paintBook();
-  else if(!UNLOCKED || MODE!=='login') pinScreen();
+  else if(!UNLOCKED || MODE==='new' || MODE==='confirm' || MODE==='adminlogin' || MODE==='adminnew' || MODE==='adminconfirm') pinScreen();
   else if(SETTINGS_OPEN) show('v-settings');
   else { paintStaff(); drawBooks(); }
 }
